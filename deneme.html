@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Audio Chat</title>
+</head>
+<body>
+    <h1>WebRTC Audio Chat</h1>
+    <div>
+        <label for="roomName">Oda Adı:</label>
+        <input type="text" id="roomName" value="Oda1">
+        <button id="joinRoom">Odaya Katıl</button>
+    </div>
+    <div>
+        <h2>Ben</h2>
+        <video id="localVideo" autoplay muted></video>
+    </div>
+    <div>
+        <h2>Karşı Taraf</h2>
+        <video id="remoteVideo" autoplay></video>
+    </div>
+    <button id="muteButton">Mikrofonu Sustur</button>
+    <script>
+        const wsUrl = "ws://localhost:8080/"; // Bağlantı sunucusu URL'si
+let socket;
+let peerConnection;
+let localStream;
+let remoteStream;
+let roomName;
+let userId;
+
+const localVideo = document.getElementById('localVideo');
+const remoteVideo = document.getElementById('remoteVideo');
+const joinRoomButton = document.getElementById('joinRoom');
+const muteButton = document.getElementById('muteButton');
+
+joinRoomButton.addEventListener('click', joinRoom);
+muteButton.addEventListener('click', toggleMute);
+
+function joinRoom() {
+  roomName = document.getElementById('roomName').value;
+  connectToWebSocket();
+}
+
+function connectToWebSocket() {
+  socket = new WebSocket(wsUrl + roomName);
+
+  socket.onopen = () => {
+    console.log('WebSocket bağlantısı kuruldu.');
+    navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      .then(stream => {
+        localStream = stream;
+        localVideo.srcObject = stream;
+        createPeerConnection();
+      })
+      .catch(error => {
+        console.error("Medya akışını almada hata oluştu:", error);
+      });
+  };
+
+  socket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    handleEvent(data);
+  };
+
+  socket.onclose = () => {
+    console.log('WebSocket bağlantısı kapandı.');
+  };
+
+  socket.onerror = (error) => {
+    console.error('WebSocket hatası: ', error);
+  };
+}
+
+function createPeerConnection() {
+  const configuration = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' } // STUN sunucusu
+    ]
+  };
+
+  peerConnection = new RTCPeerConnection(configuration);
+
+  peerConnection.addTrack(localStream.getAudioTracks()[0], localStream);
+
+  peerConnection.onicecandidate = (event) => {
+    if (event.candidate) {
+      sendEvent({ type: 'candidate', candidate: event.candidate });
+    }
+  };
+
+  peerConnection.onaddstream = (event) => {
+    remoteStream = event.stream;
+    remoteVideo.srcObject = remoteStream;
+  };
+
+  peerConnection.onnegotiationneeded = () => {
+    peerConnection.createOffer()
+      .then(offer => {
+        peerConnection.setLocalDescription(offer);
+        sendEvent({ type: 'offer', offer: offer });
+      })
+      .catch(error => {
+        console.error('Teklif oluşturmada hata oluştu:', error);
+      });
+  };
+}
+
+function handleEvent(event) {
+  switch (event.type) {
+    case 'offer':
+      peerConnection.setRemoteDescription(event.offer);
+      peerConnection.createAnswer()
+        .then(answer => {
+          peerConnection.setLocalDescription(answer);
+          sendEvent({ type: 'answer', answer: answer });
+        })
+        .catch(error => {
+          console.error('Karşılık teklifi oluşturmada hata oluştu:', error);
+        });
+      break;
+
+    case 'answer':
+      peerConnection.setRemoteDescription(event.answer);
+      break;
+
+    case 'candidate':
+      peerConnection.addIceCandidate(event.candidate);
+      break;
+
+    case 'user':
+      userId = event.user.id; // Kullanıcı kimliğini al
+      break;
+
+    // ... Diğer olayları işleyin ...
+  }
+}
+
+function sendEvent(data) {
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(data));
+  }
+}
+
+function toggleMute() {
+  const audioTrack = localStream.getAudioTracks()[0];
+  audioTrack.enabled = !audioTrack.enabled;
+  sendEvent({ type: audioTrack.enabled ? 'unmute' : 'mute' });
+}
+    </script>
+</body>
+</html>
